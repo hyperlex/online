@@ -1149,6 +1149,12 @@ L.Control.NotebookbarImpress = L.Control.NotebookbarWriter.extend({
 				'command': '.uno:SpellDialog'
 			},
 			{
+				'id': 'LanguageMenu:LanguageMenu',
+				'type': 'menubutton',
+				'text': _UNO('.uno:LanguageMenu'),
+				'command': '.uno:LanguageMenu'
+			},
+			{
 				'id': 'Review-Section-Language1',
 				'type': 'container',
 				'children': [
