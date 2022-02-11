@@ -1,0 +1,149 @@
+timeout: "1800s" # 30 min
+
+options:
+  machineType: N1_HIGHCPU_32
+
+substitutions:
+  _SERVICE_NAME: "service-collabora"
+  _KUBERNETES_NAMESPACE: 'core'
+  _DOCKER_REPOSITORY: 'eu.gcr.io/hyperlex-ci'
+
+steps:
+- id: 'Download ssh key from Google Secret Manager to pull from github/hyperlex'
+  name: google/cloud-sdk:alpine
+  entrypoint: ash
+  args:
+    - '-ce'
+    - |
+      gcloud secrets versions access latest --secret=github-ssh-key > /root/.ssh/id_github
+      chmod 600 /root/.ssh/id_github
+      cat <<EOF >/root/.ssh/config
+      Hostname github.com
+      IdentityFile /root/.ssh/id_github
+      EOF
+      ssh-keyscan -t rsa github.com > /root/.ssh/known_hosts
+  volumes:
+    - name: 'ssh'
+      path: /root/.ssh
+
+- id: 'Build and Test collabora'
+  name: ubuntu:focal
+  entrypoint: bash
+  args:
+  - -ce
+  - |
+    export DOCKER_BUILDKIT=1
+    echo "Building and pushing image"
+    ln -snf /usr/share/zoneinfo/Europe/Paris /etc/localtime && echo 'Europe/Paris' > /etc/timezone
+    sh -c "echo deb-src http://archive.ubuntu.com/ubuntu/ focal main restricted >> /etc/apt/sources.list"
+    sh -c "echo deb-src http://archive.ubuntu.com/ubuntu/ focal-updates main restricted >> /etc/apt/sources.list"
+    sh -c "echo deb-src http://security.ubuntu.com/ubuntu/ focal-security main restricted >> /etc/apt/sources.list"
+    sh -c "echo deb-src http://security.ubuntu.com/ubuntu/ focal-security universe >> /etc/apt/sources.list"
+    sh -c "echo deb-src http://security.ubuntu.com/ubuntu/ focal-security multiverse >> /etc/apt/sources.list"
+    apt-get update
+    apt-get install -y wget build-essential git libpoco-dev libcap-dev python3-polib npm libpng-dev python3-lxml libpam-dev
+    apt-get build-dep -y libreoffice
+    
+    echo "POCO"
+    mkdir -p build/poco
+    wget https://github.com/pocoproject/poco/archive/poco-1.10.1-release.tar.gz
+    tar -xzf poco-1.10.1-release.tar.gz && rm poco-1.10.1-release.tar.gz
+    cd poco-poco-1.10.1-release/
+    ./configure --static --no-tests --no-samples --no-sharedlibs --cflags="-fPIC" --omit=Zip,Data,Data/SQLite,Data/ODBC,Data/MySQL,MongoDB,PDF,CppParser,PageCompiler,Redis,Encodings --prefix=/workspace/build/poco
+    make -j 8
+    make install
+    cd ..
+    
+    echo "CORE"
+    mkdir -p build/core && cd build/core
+    wget https://github.com/CollaboraOnline/online/releases/download/for-code-assets/core-co-2021-assets.tar.gz && \
+    tar xvf core-co-2021-assets.tar.gz && rm core-co-2021-assets.tar.gz
+    cd ..
+    mkdir opt
+    cp -a ./core/instdir ./opt/lokit
+    cd ..
+    
+    echo "COLLABORA"
+    ./autogen.sh
+    ./configure --prefix=/usr --sysconfdir=/etc  --enable-silent-rules --with-lokit-path=/workspace/build/core/include --with-lo-path=/opt/lokit --with-poco-includes=/workspace/build/poco/include --with-poco-libs=/workspace/build/poco/lib --enable-debug --disable-setcap
+    make -j 32
+    DESTDIR='/workspace/build' make install
+  volumes:
+  - name: 'ssh'
+    path: /root/.ssh
+
+- id: 'Build and push image'
+  name: eu.gcr.io/hyperlex-ci/docker-compose
+  entrypoint: bash
+  env:
+    - 'SERVICE_IMAGE=${_DOCKER_REPOSITORY}/${_SERVICE_NAME}'
+  args:
+    - -ce
+    - |
+      cp /workspace/cloudbuild/start-collabora-online.sh /workspace/build
+      build_date=$(date -u +"%Y%m%d%H%M")
+      docker build \
+        --build-arg BUILD_SHA=$COMMIT_SHA \
+        --build-arg BUILD_DATE=$$build_date \
+        -f /workspace/cloudbuild/Dockerfile \
+        --ssh default=/root/.ssh/id_github \
+        -t $$SERVICE_IMAGE:$BRANCH_NAME \
+        ./build
+      docker push $$SERVICE_IMAGE:$BRANCH_NAME
+  volumes:
+    - name: 'ssh'
+      path: /root/.ssh
+  waitFor: ['Build and Test collabora']
+
+
+- id: 'Deploy'
+  name: google/cloud-sdk:alpine
+  entrypoint: 'bash'
+  args:
+  - -ce
+  - |
+    if [[
+      "$BRANCH_NAME" == "develop" ||
+      "$BRANCH_NAME" == "staging" ||
+      "$BRANCH_NAME" == "production" ||
+      "$BRANCH_NAME" == "total-staging" ||
+      "$BRANCH_NAME" == "total-production"
+    ]]
+    then
+      # installing kubectl
+      curl -LO "https://storage.googleapis.com/kubernetes-release/release/$(curl -s https://storage.googleapis.com/kubernetes-release/release/stable.txt)/bin/linux/amd64/kubectl"
+      chmod +x ./kubectl && mv ./kubectl /usr/local/bin/kubectl
+
+      # installing jq
+      apk add --upgrade jq
+
+      project="hyperlex-$BRANCH_NAME"
+      region="europe-west1"
+      if [[
+        "$BRANCH_NAME" == "total-staging" ||
+        "$BRANCH_NAME" == "total-production"
+      ]]
+      then
+        region="europe-west4"
+      fi
+
+      # Deploy
+      gcloud container clusters get-credentials main-cluster --region $region --project $project
+      kubectl --namespace ${_KUBERNETES_NAMESPACE} get job clm-database-updater -o json | jq 'del(.spec.selector.matchLabels."controller-uid")' | jq 'del(.spec.template.metadata.labels."controller-uid")' | kubectl replace --force -f -
+      while [ $(kubectl -n ${_KUBERNETES_NAMESPACE} get jobs.batch -o json clm-database-updater | jq .status.succeeded) != 1 ]
+      do
+          echo "Database update incomplete, retrying in 30 seconds"
+          sleep 30
+      done
+      echo "Database update succeeded"
+      kubectl --namespace ${_KUBERNETES_NAMESPACE} rollout restart deployment ${_SERVICE_NAME}
+    fi
+
+- id: "Slack"
+  name: gcr.io/cloud-builders/gcloud
+  entrypoint: bash
+  args:
+  - -ce
+  - |
+    webhook=$(gcloud secrets versions access latest --secret=slack-tech-ci-webhook)
+    curl -X POST -H 'Content-type: application/json' --data '{"blocks": [{"type": "section", "text": {"type": "mrkdwn", "text":":mountain_cableway: $REPO_NAME *$BRANCH_NAME* sha $SHORT_SHA succeeded :star:. Good job. <https://console.cloud.google.com/cloud-build/builds/$BUILD_ID?project=hyperlex-ci|Details>"}}]}' $webhook
