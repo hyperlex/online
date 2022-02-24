@@ -3,6 +3,9 @@
 # License, v. 2.0. If a copy of the MPL was not distributed with this
 # file, You can obtain one at http://mozilla.org/MPL/2.0/.
 
+# Allow to mount secrets on /tmp/.secrets instead of passing them as environment variables
+[ -f /tmp/.secrets ] && source /tmp/.secrets
+
 # Fix domain name resolution from jails
 cp /etc/resolv.conf /etc/hosts /opt/cool/systemplate/etc/
 
