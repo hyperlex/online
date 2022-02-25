@@ -49,6 +49,8 @@ window.app = { // Shouldn't have any functions defined.
 
 (function (global) {
 
+	global.host= (window.location.protocol === 'https:' ? 'wss://': 'ws://') + window.location.host;
+
 	global.logServer = function (log) {
 		if (window.ThisIsAMobileApp) {
 			window.postMobileError(log);
