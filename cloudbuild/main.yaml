@@ -80,16 +80,27 @@ steps:
   args:
     - -ce
     - |
-      cp /workspace/cloudbuild/start-collabora-online.sh /workspace/build
-      build_date=$(date -u +"%Y%m%d%H%M")
-      docker build \
-        --build-arg BUILD_SHA=$COMMIT_SHA \
-        --build-arg BUILD_DATE=$$build_date \
-        -f /workspace/cloudbuild/Dockerfile \
-        --ssh default=/root/.ssh/id_github \
-        -t $$SERVICE_IMAGE:$BRANCH_NAME \
-        ./build
-      docker push $$SERVICE_IMAGE:$BRANCH_NAME
+      if [[
+        "$BRANCH_NAME" == "develop" ||
+        "$BRANCH_NAME" == "staging" ||
+        "$BRANCH_NAME" == "production" ||
+        "$BRANCH_NAME" == "total-staging" ||
+        "$BRANCH_NAME" == "total-production"
+      ]]
+      then
+        cp /workspace/cloudbuild/start-collabora-online.sh /workspace/build
+        build_date=$(date -u +"%Y%m%d%H%M")
+        docker build \
+          --build-arg BUILD_SHA=$COMMIT_SHA \
+          --build-arg BUILD_DATE=$$build_date \
+          -f /workspace/cloudbuild/Dockerfile \
+          --ssh default=/root/.ssh/id_github \
+          -t $$SERVICE_IMAGE:$BRANCH_NAME \
+          ./build
+        docker push $$SERVICE_IMAGE:$BRANCH_NAME
+      else
+        echo "Won't push image for this branch"
+      fi
   volumes:
     - name: 'ssh'
       path: /root/.ssh
