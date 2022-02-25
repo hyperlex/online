@@ -41,12 +41,6 @@ fi
 if test -n "${domain}"; then
     perl -pi -e "s/localhost<\/host>/${domain}<\/host>/g" /etc/coolwsd/coolwsd.xml
 fi
-if test -n "${username}"; then
-    perl -pi -e "s/<username (.*)>.*<\/username>/<username \1>${username}<\/username>/" /etc/coolwsd/coolwsd.xml
-fi
-if test -n "${password}"; then
-    perl -pi -e "s/<password (.*)>.*<\/password>/<password \1>${password}<\/password>/" /etc/coolwsd/coolwsd.xml
-fi
 if test -n "${server_name}"; then
     perl -pi -e "s/<server_name (.*)>.*<\/server_name>/<server_name \1>${server_name}<\/server_name>/" /etc/coolwsd/coolwsd.xml
 fi
@@ -64,6 +58,8 @@ fi
 # Generate WOPI proof key
 coolwsd-generate-proof-key
 
+echo "Extra params: ${extra_params}"
+echo "Username: ${username}"
+
 # Start coolwsd
-echo ${extra_params}
-exec /usr/bin/coolwsd --version --o:sys_template_path=/opt/cool/systemplate --o:child_root_path=/opt/cool/child-roots --o:file_server_root_path=/usr/share/coolwsd --o:logging.color=false ${extra_params}
+exec /usr/bin/coolwsd --version --o:sys_template_path=/opt/cool/systemplate --o:child_root_path=/opt/cool/child-roots --o:file_server_root_path=/usr/share/coolwsd --o:logging.color=false --o:admin_console.username=${username} --o:admin_console.password=${password} ${extra_params}
