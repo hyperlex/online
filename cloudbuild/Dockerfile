@@ -17,7 +17,7 @@ RUN apt-get update && \
                libcap2-bin openssl openssh-client inotify-tools procps \
                libxcb-shm0 libxcb-render0 libxrender1 libxext6 \
                fonts-wqy-zenhei fonts-wqy-microhei fonts-droid-fallback \
-               fonts-noto-cjk
+               fonts-noto-cjk curl
 
 # copy freshly built Poco, LOKit and Collabora Online
 COPY / /
